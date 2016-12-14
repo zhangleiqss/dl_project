@@ -57,7 +57,7 @@ class ASRBaseModel(object):
     
     def model_restore(self, model_path=None):
         if model_path == None:
-            self.saver.restore(self.sess, '{}/{}.ckpt'.format(self.model_dir,self.current_task_name))
+            self.saver.restore(self.sess, '{}{}.ckpt'.format(self.model_dir,self.current_task_name))
         else:
             self.saver.restore(self.sess, model_path)
         print('Load Model ...')
@@ -134,15 +134,15 @@ class ASRBaseModel(object):
             print('Epoch', epoch+1, 'training err:', epochEr)
             if best_train_er > epochEr:
                 best_train_er = epochEr     
-                if self.epoch_save:
-                    save_path = self.saver.save(self.sess, '{}/{}.ckpt'.format(self.model_dir,self.current_task_name))
-                print("Model saved in file: %s" % save_path)
-            
+                
             #model testing...     
             print('Epoch', epoch+1, '... test ...')      
             epochTestLoss, epochTestEr = self.model_run(input_list, test_idxs, mode='test')     
             if best_test_er > epochTestEr: 
                 best_test_er = epochTestEr
+                if self.epoch_save:
+                    save_path = self.saver.save(self.sess, '{}{}.ckpt'.format(self.model_dir,self.current_task_name))
+                print("Model saved in file: %s" % save_path)
             print('Epoch', epoch+1, 'test er:', epochTestEr)
     
             self.log_loss.append([epochLoss, epochTestLoss])

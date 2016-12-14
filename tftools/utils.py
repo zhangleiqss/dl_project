@@ -4,6 +4,7 @@ import os
 import tensorflow as tf
 from tf_layer import *
 
+
 def target_list_to_sparse_tensor(targetList):
     '''make tensorflow SparseTensor from list of targets, with each element
        in the list being a list or array with the values of the target sequence
