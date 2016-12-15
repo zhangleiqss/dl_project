@@ -4,35 +4,38 @@ sys.path.append('../tftools')
 import tensorflow as tf
 import numpy as np
 from tensorflow.python.ops import ctc_ops as ctc
-from utils import *
+from tf_object import *
 import time
 import ast
 from tensorflow.python.ops import rnn_cell
 from tensorflow.python.ops.rnn import bidirectional_dynamic_rnn,dynamic_rnn
 
-class ASRBaseModel(object):
+class ASRBaseModel(TFModel):
     def __init__(self, config, sess):
-        self.sess = sess
-        self.gpu_option = '/gpu:{}'.format(config.gpu_id)
+        super(ASRBaseModel, self).__init__(config, sess)
         self.mfcc_features = config.mfcc_features
-        tf.GraphKeys.INPUTS = 'inputs'
         self.voca_size = config.voca_size
         self.logits = None
-        self.optimizer = 'sgd'
-        self.model_dir = config.model_dir
-        self.learning_rate = config.learning_rate
-        self.batch_size = config.batch_size 
-        self.clip_gradients = config.clip_gradients 
-        self.n_epochs = config.n_epochs 
-        self.epoch_save = config.epoch_save 
-        self.print_step = config.print_step 
-        self.model_dir = config.model_dir
+        self.optimizer = 'sgd'  
         self.current_task_name = 'asrmodel'
-        self.log_loss = []
-        if not os.path.isdir(self.model_dir):
-            raise Exception(" [!] Directory %s not found" % self.model_dir)
+        self.metric_name = 'error_rate'
         #self.fetch_dict = None
-        
+    def __better__(self, current_metric, best_metric):
+        return current_metric <= best_metric
+    
+    def __worst_metric__(self):
+        return 1.0
+    
+    def __get_feed_dict__(self, input_list, input_var, batch_idx, mode):
+        feedDict = {}
+        temp_x = input_list[0][batch_idx] #inputX   
+        feedDict[input_var[0]] = np.zeros(shape=(len(batch_idx),np.max(input_list[1][batch_idx]), self.mfcc_features))
+        for j in range(len(batch_idx)):
+            feedDict[input_var[0]][j][:input_list[1][batch_idx][j],:] = np.transpose(temp_x[j])
+        feedDict[input_var[1]] = input_list[1][batch_idx] #seqLengths
+        feedDict[input_var[2]], feedDict[input_var[3]], feedDict[input_var[4]] = target_list_to_sparse_tensor(input_list[2][batch_idx])
+        feedDict[input_var[5]] = (mode=='train')       
+        return feedDict    
     def build_input_graph(self):       
         with tf.device(self.gpu_option): 
             with tf.name_scope('input'):
@@ -54,14 +57,7 @@ class ASRBaseModel(object):
         with tf.device(self.gpu_option): 
             with tf.name_scope('model'):
                 self.logits = my_conv_1d(self.inputX, 1, self.voca_size, add_bias=False, act=tf.identity)
-    
-    def model_restore(self, model_path=None):
-        if model_path == None:
-            self.saver.restore(self.sess, '{}{}.ckpt'.format(self.model_dir,self.current_task_name))
-        else:
-            self.saver.restore(self.sess, model_path)
-        print('Load Model ...')
-            
+                
     def build_model_loss(self, optimizer='adam', clip_type='clip_norm'):
         with tf.device(self.gpu_option): 
             with tf.name_scope('loss'):
@@ -82,9 +78,9 @@ class ASRBaseModel(object):
                     optim = tf.train.GradientDescentOptimizer(self.lr)
                 self.opt, grads, capped_gvs = my_minimize_loss(optim, self.loss, self.params, 
                                                            clip_type=clip_type, max_clip_grad=self.clip_gradients)
-            self.fetch_dict = [self.opt, self.loss, self.errorRate, self.predictions_dense]
-            self.saver = tf.train.Saver()  
-            tf.initialize_all_variables().run() 
+            self.fetch_dict['self_prediction'] = [self.opt, self.loss, self.errorRate]
+            #self.saver = tf.train.Saver()  
+            #tf.initialize_all_variables().run() 
         #for var in self.params:
         #    print(var.name, var.get_shape())
         
@@ -92,71 +88,8 @@ class ASRBaseModel(object):
         for var in self.params:
             print(var.name, var.get_shape())
             
-    def model_run(self, input_list, idxs, mode='train'): 
-        id_idxs = np.arange(0, len(idxs))
-        np.random.shuffle(id_idxs)
-        batchMetrics = []
-        batchLoss = []
-        input_var = tf.get_collection(tf.GraphKeys.INPUTS)
-        for i, idx in enumerate(range(0, len(idxs), self.batch_size)):
-            batch_idx = idxs[id_idxs[idx:idx+self.batch_size]]
-            feedDict = {}
-            temp_x = input_list[0][batch_idx] #inputX   
-            feedDict[input_var[0]] = np.zeros(shape=(len(batch_idx),np.max(input_list[1][batch_idx]), self.mfcc_features))
-            for j in range(len(batch_idx)):
-                feedDict[input_var[0]][j][:input_list[1][batch_idx][j],:] = np.transpose(temp_x[j])
-            feedDict[input_var[1]] = input_list[1][batch_idx] #seqLengths
-            feedDict[input_var[2]], feedDict[input_var[3]], feedDict[input_var[4]] = target_list_to_sparse_tensor(input_list[2][batch_idx])
-            if mode == 'train':
-                feedDict[input_var[5]] = True
-                _, l, er = self.sess.run(self.fetch_dict[0:3], feed_dict=feedDict)
-                if i%self.print_step == 0:
-                    print('Minibatch', i, '/', 'loss:', np.mean(l))
-                    print('Minibatch', i, '/', 'er:', er)
-            else:
-                feedDict[input_var[5]] = False
-                l, er = self.sess.run(self.fetch_dict[1:3], feed_dict=feedDict)
-            batchMetrics.append(er*len(batch_idx))
-            batchLoss.append(np.sum(l))
-        epochAcc = np.array(batchMetrics).sum() / len(id_idxs)
-        epochLoss = np.array(batchLoss).sum() / len(id_idxs)
-        return epochLoss, epochAcc
     
-    def run(self, input_list, train_idxs, test_idxs):
-        best_train_er = 1.0
-        best_test_er = 1.0
-        for epoch in xrange(self.n_epochs):
-            print('Epoch', epoch+1, '... training ...')
-            t1 = time.time()
-            epochLoss, epochEr = self.model_run(input_list, train_idxs, mode='train')
-            t2 = time.time()
-            print('epoch time:', (t2 - t1)/60)
-            print('Epoch', epoch+1, 'training err:', epochEr)
-            if best_train_er > epochEr:
-                best_train_er = epochEr     
-                
-            #model testing...     
-            print('Epoch', epoch+1, '... test ...')      
-            epochTestLoss, epochTestEr = self.model_run(input_list, test_idxs, mode='test')     
-            if best_test_er > epochTestEr: 
-                best_test_er = epochTestEr
-                if self.epoch_save:
-                    save_path = self.saver.save(self.sess, '{}{}.ckpt'.format(self.model_dir,self.current_task_name))
-                print("Model saved in file: %s" % save_path)
-            print('Epoch', epoch+1, 'test er:', epochTestEr)
-    
-            self.log_loss.append([epochLoss, epochTestLoss])
-            state = {
-                'loss': epochLoss,
-                'valid_los': epochTestLoss,
-                'best_er': best_train_er,
-                'best_test_er': best_test_er,
-                'epoch': epoch,
-                'learning_rate': self.learning_rate,
-                'optimizer': self.optimizer
-                }
-            print(state)
-            
+              
 class WaveNet(ASRBaseModel):
     def __init__(self, config, sess, current_task_name='wavenet'):
         super(WaveNet, self).__init__(config, sess)

@@ -8,13 +8,13 @@ from tensorflow.python.ops.rnn_cell import RNNCell,LSTMCell,LSTMStateTuple
 def variable_summaries(var, name):
     with tf.name_scope('summaries'):
         mean = tf.reduce_mean(var)
-        tf.scalar_summary('mean/' + name, mean)
+        tf.summary.scalar('mean/' + name.replace(':', '_'), mean)
         with tf.name_scope('stddev'):
             stddev = tf.sqrt(tf.reduce_mean(tf.square(var - mean)))
-        tf.scalar_summary('stddev/' + name, stddev)
-        tf.scalar_summary('max/' + name, tf.reduce_max(var))
-        tf.scalar_summary('min/' + name, tf.reduce_min(var))
-        tf.histogram_summary(name, var)
+        tf.summary.scalar('stddev/' + name.replace(':', '_'), stddev)
+        tf.summary.scalar('max/' + name.replace(':', '_'), tf.reduce_max(var))
+        tf.summary.scalar('min/' + name.replace(':', '_'), tf.reduce_min(var))
+        tf.summary.histogram(name.replace(':', '_'), var)
 
 def my_minimize_loss(opt, loss, params, clip_type=None, max_clip_grad=1.0, dependency=None):
     grads = opt.compute_gradients(loss, params)

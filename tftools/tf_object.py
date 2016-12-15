@@ -16,7 +16,8 @@ class TFModel(object):
         self.print_step = config.print_step #print step duraing training
         self.logs_dir = config.logs_dir
         self.model_dir = config.model_dir
-        self.current_task_name = config.current_task_name
+        self.current_task_name = 'tf_models'
+        #self.current_task_name = config.current_task_name
         if not os.path.isdir(self.logs_dir):
             raise Exception(" [!] Directory %s not found" % self.logs_dir)
         if not os.path.isdir(self.model_dir):
@@ -25,11 +26,12 @@ class TFModel(object):
         self.dir_clear = config.dir_clear
         if self.dir_clear:
             model_logger_dir_prepare(self.logs_dir, self.model_dir, self.current_task_name)
-        self.train_writer = tf.train.SummaryWriter(self.logs_dir + self.current_task_name + '/train',
+        self.train_writer = tf.summary.FileWriter(self.logs_dir + self.current_task_name + '/train',
                                         self.sess.graph)
-        self.test_writer = tf.train.SummaryWriter(self.logs_dir + self.current_task_name + '/test')
+        self.test_writer = tf.summary.FileWriter(self.logs_dir + self.current_task_name + '/test')
         self.step_train = 0
         self.step_test = 0
+        self.summary_step = 0
         self.saver = None
         self.metric_name = 'accuracy'
         self.gpu_option = '/gpu:{}'.format(config.gpu_id)
@@ -66,26 +68,32 @@ class TFModel(object):
     def __set_metric_name__(self, name):
         self.metric_name = name
     
+    def __get_feed_dict__(self, input_list, input_var, batch_idx, mode):
+        feedDict = {}
+        for j in range(len(input_list)):
+            feedDict[input_var[j]] = input_list[j][batch_idx]
+        return feedDict
+    
     def build_model_summary(self, summary_step=0):
         for var in tf.trainable_variables():
-            tf.histogram_summary(var.name, var)
+            tf.summary.histogram(var.name.replace(':', '_'), var)
         for loss in self.loss_list:
-            tf.scalar_summary(loss.name, loss)
+            tf.summary.scalar(loss.name.replace(':', '_'), loss)
         for metric in self.metrics_list:
-            tf.scalar_summary(metric.name, metric)
+            tf.summary.scalar(metric.name.replace(':', '_'), metric)
         for grads in self.grad_list:
             for grad, var in grads:
-                tf.histogram_summary(var.name + '/gradient', grad)
+                tf.summary.histogram(var.name.replace(':', '_') + '/gradient', grad)
         for capped_gvs in self.capped_grad_list:
             for grad, var in capped_gvs:
-                tf.histogram_summary(var.name + '/clip_gradient', grad)
-        self.merged = tf.merge_all_summaries()
+                tf.summary.histogram(var.name.replace(':', '_') + '/clip_gradient', grad)
+        self.merged = tf.summary.merge_all()
         for key in self.fetch_dict.keys():
             self.fetch_dict[key].append(self.merged)
         print('Initializing')
         self.saver = tf.train.Saver()
         self.summary_step = summary_step
-        tf.initialize_all_variables().run()
+        tf.global_variables_initializer().run()
     
     def model_restore(self, model_path=None):
         if model_path == None:
@@ -93,7 +101,7 @@ class TFModel(object):
         else:
             self.saver.restore(self.sess, model_path)
         print('Load Model ...')
-       
+              
     #training and evaluation    
     def model_run(self, input_list, idxs, run_type, mode='train', shuffle=True, save_metric=False):
         id_idxs = np.arange(0, len(idxs))
@@ -105,9 +113,10 @@ class TFModel(object):
         input_var = tf.get_collection(tf.GraphKeys.INPUTS)
         for i, idx in enumerate(range(0, len(idxs), self.batch_size)):
             batch_idx = np.sort(idxs[id_idxs[idx:idx+self.batch_size]]).tolist()
-            feedDict = {}
-            for j in range(len(input_list)):
-                feedDict[input_var[j]] = input_list[j][batch_idx]
+            feedDict = self.__get_feed_dict__(input_list, input_var, batch_idx, mode)
+            #feedDict = {}
+            #for j in range(len(input_list)):
+            #    feedDict[input_var[j]] = input_list[j][batch_idx]
             if mode == 'train':
                 if self.summary_step==0 or i%self.summary_step!=0:
                     _, l, metr = self.sess.run(self.fetch_dict['{}_prediction'.format(run_type)][0:3], feed_dict=feedDict)

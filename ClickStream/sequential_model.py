@@ -11,7 +11,7 @@ from tensorflow.python.ops.rnn import bidirectional_rnn,bidirectional_dynamic_rn
 
 
 class SequentialModel(TFModel):
-    def __init__(self, config, sess):
+    def __init__(self, config, sess, current_task_name='sequence_model'):
         super(SequentialModel, self).__init__(config, sess)
         
         self.nb_words = config.nb_words #term number in input sequence
@@ -28,6 +28,7 @@ class SequentialModel(TFModel):
         self.logits_list = []
         self.lr_dict = {} 
         self.pred_dict = {}
+        self.current_task_name = current_task_name
     
     #build the input RNN
     def build_input_sequence(self):       

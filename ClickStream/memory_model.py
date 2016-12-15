@@ -6,7 +6,7 @@ import tensorflow as tf
 
 
 class MemN2NModel(TFModel):
-    def __init__(self, config, sess): 
+    def __init__(self, config, sess, current_task_name='memn2n_model'): 
         super(MemN2NModel, self).__init__(config, sess)
         self.nb_words = config.nb_words 
         self.init_hid = config.init_hid
@@ -15,6 +15,7 @@ class MemN2NModel(TFModel):
         self.embedding_size = config.embedding_size #embedding size
         self.nhop = config.nhop 
         self.lindim = int(math.floor(config.linear_ratio * self.embedding_size))
+        self.current_task_name = current_task_name
         
     def build_memory(self):
         with tf.device(self.gpu_option): 
