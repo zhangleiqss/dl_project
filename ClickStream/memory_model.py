@@ -58,14 +58,18 @@ class MemN2NModel(TFModel):
                         K = tf.nn.relu(G)
                         self.hid.append(tf.concat(1, [F, K]))
             
-    def build_prediction(self, type='self', accK=5):
+    def build_prediction(self, type='self', accK=5, nb_class=None):
         with tf.device(self.gpu_option):
+            if type == 'self':
+                nb_class = self.nb_words
+            elif nb_class == None:
+                raise Exception("nb_class must be given")
             with tf.name_scope('prediction'):
-                self.prediction = my_full_connected(self.hid[-1], self.embedding_size, self.nb_words, 
+                self.prediction = my_full_connected(self.hid[-1], self.embedding_size, nb_class, 
                                               layer_name='fc', add_bias=False, 
                                               act=tf.identity, init_std=self.init_std)
                 params = tf.trainable_variables()
-            with tf.name_scope('train'):
+            with tf.name_scope('train'):             
                 self.lr = tf.Variable(self.learning_rate)
                 opt = tf.train.GradientDescentOptimizer(self.lr)
                 loss = tf.nn.sparse_softmax_cross_entropy_with_logits(self.prediction, self.output_target)
