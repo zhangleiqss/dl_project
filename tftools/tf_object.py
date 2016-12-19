@@ -144,14 +144,14 @@ class TFModel(object):
         return epochLoss, epochAcc, sampleMetrics
             
             
-    def run(self, input_list, train_idxs, test_idxs, run_type='self'):
+    def run(self, input_list, train_idxs, test_idxs, run_type='self', shuffle=True):
         best_train_metric = self.__worst_metric__()
         best_test_metric = self.__worst_metric__()
         input_var = tf.get_collection(tf.GraphKeys.INPUTS)
         for epoch in range(self.n_epochs):       
             print('Epoch', epoch+1, '... training ...')
             t1 = time.time()
-            epochLoss, epochMetric, _ = self.model_run(input_list, train_idxs, run_type, mode='train')
+            epochLoss, epochMetric, _ = self.model_run(input_list, train_idxs, run_type, mode='train', shuffle=shuffle)
             t2 = time.time()
             print('epoch time:', (t2-t1)/60)
             print('Epoch', epoch+1, 'training {}:'.format(self.metric_name), epochMetric)
@@ -185,5 +185,5 @@ class TFModel(object):
                 if len(self.log_loss) > 1 and self.log_loss[epoch][1] > self.log_loss[epoch-1][1] * 0.9999:
                     self.learning_rate = self.learning_rate / self.lr_annealing_value
                     self.lr.assign(self.learning_rate).eval()
-                if self.lr_stop_value < 1e-5: break
+            if self.lr_annealing and if self.lr_stop_value < 1e-5: break
             

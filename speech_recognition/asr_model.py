@@ -5,6 +5,7 @@ import tensorflow as tf
 import numpy as np
 from tensorflow.python.ops import ctc_ops as ctc
 from tf_object import *
+from tf_layer import *
 import time
 import ast
 from tensorflow.python.ops import rnn_cell
@@ -153,6 +154,7 @@ class DeepSpeech(ASRBaseModel):
                         conv_x = tf.nn.dropout(conv_x, conv_keep_prob)
                 with tf.name_scope('rnn'):
                     single_cell = rnn_cell.LSTMCell(self.rnn_dim, use_peepholes=True, state_is_tuple=True)
+                    #single_cell = BNLSTMCell(self.rnn_dim, self.training, use_peepholes=True, state_is_tuple=True)
                     #rnn dropout
                     if zoneout_state + zoneout_cell > 1e-7:
                         single_cell = ZoneoutWrapper(single_cell, self.training, zoneout_state, zoneout_cell)

@@ -3,7 +3,6 @@ import tensorflow as tf
 from tensorflow.python.ops import nn_ops
 from tensorflow.python.ops.rnn_cell import RNNCell,LSTMCell,LSTMStateTuple
 
-
 #summary for scalar
 def variable_summaries(var, name):
     with tf.name_scope('summaries'):
@@ -169,3 +168,5 @@ class ZoneoutWrapper(LSTMCell):
         cell_update, state_update = tf.cond(self._training,train,test)
         new_state_update = LSTMStateTuple(cell_update,state_update)      
         return output, new_state_update
+
+    
