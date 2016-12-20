@@ -1,7 +1,9 @@
 import tensorflow as tf
-from utils import *
+from tf_layer import *
 import time 
 import math
+from IPython.display import display, HTML
+import pandas as pd
 
 class TFModel(object):
     def __init__(self, config, sess):
@@ -74,6 +76,12 @@ class TFModel(object):
             feedDict[input_var[j]] = input_list[j][batch_idx]
         return feedDict
     
+    def __get_parameters_num__(self, shape_list):
+        num = 1L
+        for l in shape_list:
+            num *= l
+        return num
+
     def build_model_summary(self, summary_step=0):
         for var in tf.trainable_variables():
             tf.summary.histogram(var.name.replace(':', '_'), var)
@@ -94,6 +102,14 @@ class TFModel(object):
         self.saver = tf.train.Saver()
         self.summary_step = summary_step
         tf.global_variables_initializer().run()
+    
+    def model_summary(self):
+        columns = ['variable_name','variable_shape', 'parameters']
+        df_summary = pd.DataFrame(columns=columns)
+        for i, var in enumerate(tf.trainable_variables()):
+            sl = var.get_shape().as_list()
+            df_summary.loc[i] = [var.name, sl, self.__get_parameters_num__(sl)]
+        return df_summary
     
     def model_restore(self, model_path=None):
         if model_path == None:
@@ -185,5 +201,5 @@ class TFModel(object):
                 if len(self.log_loss) > 1 and self.log_loss[epoch][1] > self.log_loss[epoch-1][1] * 0.9999:
                     self.learning_rate = self.learning_rate / self.lr_annealing_value
                     self.lr.assign(self.learning_rate).eval()
-            if self.lr_annealing and if self.lr_stop_value < 1e-5: break
+            if self.lr_annealing and self.lr_stop_value < 1e-5: break
             

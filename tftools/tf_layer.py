@@ -2,14 +2,14 @@ import tensorflow as tf
 from tensorflow.python.ops import nn_ops
 from tensorflow.python.ops.rnn_cell import RNNCell,LSTMCell,LSTMStateTuple
 from tf_func import *
+from utils import *
 from tensorflow.python.ops import variable_scope as vs
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops.math_ops import sigmoid
 from tensorflow.python.ops.math_ops import tanh
 from tensorflow.python.ops import partitioned_variables
 from tensorflow.python.ops import clip_ops
-from tensorflow.python.ops.rnn_cell import _linear
-
+from tensorflow.python.ops import math_ops
 
 #my full connected layer
 def my_full_connected(input_tensor, input_dim, output_dim, add_bias=True,
@@ -121,32 +121,38 @@ def my_flatten(input_tensor, layer_name='flatten'):
         else:
             return input_tensor
         
-def my_batch_norm(input_tensor, training, epsilon=1e-3, decay=0.99, layer_name='bn_layer'):
-    with tf.name_scope(layer_name):
+def my_batch_norm(input_tensor, training, recurrent=False, epsilon=1e-3, decay=0.999, layer_name='bn_layer'):
+    with tf.variable_scope(layer_name):
         x_shape = input_tensor.get_shape()
         axis = list(range(len(x_shape) - 1))
         params_shape = x_shape[-1:]
-        scale = tf.Variable(tf.ones(params_shape), name='scale')
-        beta = tf.Variable(tf.zeros(params_shape), name='beta')
-        pop_mean = tf.Variable(tf.zeros(params_shape), trainable=False, name='pop_mean')
-        pop_var = tf.Variable(tf.ones(params_shape), trainable=False, name='pop_var')
-        batch_mean, batch_var = tf.nn.moments(input_tensor, axis)
-        
+        if recurrent:
+            scale = tf.get_variable('scale', params_shape, initializer=tf.constant_initializer(1.0))
+            offset = tf.get_variable('offset', params_shape, initializer=tf.constant_initializer(0.0))
+            pop_mean = tf.get_variable('pop_mean', params_shape, initializer=tf.constant_initializer(0), trainable=False)
+            pop_var = tf.get_variable('pop_var', params_shape, initializer=tf.constant_initializer(1.0), trainable=False)
+        else:
+            scale = tf.Variable(tf.ones(params_shape), name='scale')
+            offset = tf.Variable(tf.zeros(params_shape), name='offset')
+            pop_mean = tf.Variable(tf.zeros(params_shape), trainable=False, name='pop_mean')
+            pop_var = tf.Variable(tf.ones(params_shape), trainable=False, name='pop_var')   
+       
+        batch_mean, batch_var = tf.nn.moments(input_tensor, axis)    
         train_mean = tf.assign(pop_mean, pop_mean * decay + batch_mean * (1 - decay))
         train_var = tf.assign(pop_var, pop_var * decay + batch_var * (1 - decay))
         
         def batch_statistics():
             with tf.control_dependencies([train_mean, train_var]):
-                return tf.nn.batch_normalization(input_tensor,batch_mean, batch_var, beta, scale, epsilon)
+                return tf.nn.batch_normalization(input_tensor,batch_mean, batch_var, offset, scale, epsilon)
         def population_statistics():
-            return tf.nn.batch_normalization(input_tensor,pop_mean, pop_var, beta, scale, epsilon)
+            return tf.nn.batch_normalization(input_tensor,pop_mean, pop_var, offset, scale, epsilon)
         
         return tf.cond(training, batch_statistics, population_statistics)
 
+###########################################################################################################################    
 class BNLSTMCell(LSTMCell):
-    def __init__(self, num_units, training, **kwargs):
-        super(BNLSTMCell, self).__init__(num_units, **kwargs)     
-        self._num_units = num_units
+    def __init__(self, training, *args, **kwargs):
+        super(BNLSTMCell, self).__init__(*args, **kwargs)     
         self._training = training
        
     @property
@@ -166,21 +172,21 @@ class BNLSTMCell(LSTMCell):
             c_prev = array_ops.slice(state, [0, 0], [-1, self._num_units])
             m_prev = array_ops.slice(state, [0, self._num_units], [-1, num_proj])
 
+
         dtype = inputs.dtype
         input_size = inputs.get_shape().with_rank(2)[1]
         if input_size.value is None:
             raise ValueError("Could not infer input size from inputs.get_shape()[-1]")
-        with vs.variable_scope(scope or "lstm_cell", initializer=self._initializer) as unit_scope:
-            if self._num_unit_shards is not None:
-                unit_scope.set_partitioner(partitioned_variables.fixed_size_partitioner(self._num_unit_shards))
+        with vs.variable_scope(scope or "lstm_cell", initializer=self._initializer) as unit_scope:             
+            #concat_w = _get_concat_variable("W", [input_size.value + num_proj, 4 * self._num_units], dtype, self._num_unit_shards)
             
-            # i = input_gate, j = new_input, f = forget_gate, o = output_gate
-            #lstm_matrix = _linear([inputs, m_prev], 4 * self._num_units, bias=False, scope=scope)
-            W_xh = vs.get_variable('W_xh', [input_size, 4 * self._num_units], dtype=dtype)
-            W_hh = vs.get_variable('W_hh', [self._num_units, 4 * self._num_units], dtype=dtype)
-            lstm_matrix = my_batch_norm(tf.matmul(inputs, W_xh), self._training) + tf.matmul(m_prev, W_hh)
-            #i, j, f, o = array_ops.split(value=lstm_matrix, num_or_size_splits=4, axis=1)
-            i, j, f, o = tf.split(1, 4, lstm_matrix)
+            W_xh = vs.get_variable("W_xh", shape=[input_size.value, 4 * self._num_units], dtype=dtype)
+            W_hh = vs.get_variable("W_hh", shape=[self._num_units, 4 * self._num_units], dtype=dtype)
+            xh = math_ops.matmul(inputs, W_xh)
+            hh = math_ops.matmul(m_prev, W_hh)
+            bn_xh = my_batch_norm(xh,self._training,recurrent=True)
+            lstm_matrix = bn_xh + hh
+            i, j, f, o = array_ops.split(1, 4, lstm_matrix)
             # Diagonal connections
             if self._use_peepholes:
                 with vs.variable_scope(unit_scope) as projection_scope:

@@ -153,8 +153,8 @@ class DeepSpeech(ASRBaseModel):
                     if conv_keep_prob > 0 and conv_keep_prob < 1:
                         conv_x = tf.nn.dropout(conv_x, conv_keep_prob)
                 with tf.name_scope('rnn'):
-                    single_cell = rnn_cell.LSTMCell(self.rnn_dim, use_peepholes=True, state_is_tuple=True)
-                    #single_cell = BNLSTMCell(self.rnn_dim, self.training, use_peepholes=True, state_is_tuple=True)
+                    #single_cell = rnn_cell.LSTMCell(self.rnn_dim, use_peepholes=True, state_is_tuple=True)
+                    single_cell = BNLSTMCell(self.training, self.rnn_dim, use_peepholes=True, state_is_tuple=True)
                     #rnn dropout
                     if zoneout_state + zoneout_cell > 1e-7:
                         single_cell = ZoneoutWrapper(single_cell, self.training, zoneout_state, zoneout_cell)

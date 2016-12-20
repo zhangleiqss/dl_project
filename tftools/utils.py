@@ -2,7 +2,6 @@ import numpy as np
 import shutil
 import os
 import tensorflow as tf
-from tf_layer import *
 
 
 def target_list_to_sparse_tensor(targetList):
