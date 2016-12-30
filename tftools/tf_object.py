@@ -36,7 +36,10 @@ class TFModel(object):
         self.summary_step = 0
         self.saver = None
         self.metric_name = 'accuracy'
-        self.gpu_option = '/gpu:{}'.format(config.gpu_id)
+        #self.gpu_option = '/gpu:{}'.format(config.gpu_id)
+        self.gpu_option = config.gpu_id
+        self.gpu_num = config.gpu_num
+        self.gpus = range(config.gpu_num) if config.gpu_num > 0 else [config.gpu_id]
         
         self.lr_annealing = config.lr_annealing
         self.lr_annealing_value = 1.5
@@ -48,7 +51,11 @@ class TFModel(object):
         self.grad_list = []
         self.capped_grad_list = []
         self.metrics_list = []
-        self.log_loss = [] 
+        self.log_loss = []
+        self.tower_grads = []
+        self.tower_capped_gvs = []
+        self.tower_loss = []
+        self.tower_metrics = []
         self.fetch_dict = {}
         self.lr = None
         tf.GraphKeys.INPUTS = 'inputs'
@@ -113,13 +120,15 @@ class TFModel(object):
     
     def model_restore(self, model_path=None):
         if model_path == None:
-            self.saver.restore(self.sess, '{}/{}.ckpt'.format(self.model_dir,self.current_task_name))
+            self.saver.restore(self.sess, '{}{}.ckpt'.format(self.model_dir,self.current_task_name))
         else:
             self.saver.restore(self.sess, model_path)
         print('Load Model ...')
               
     #training and evaluation    
     def model_run(self, input_list, idxs, run_type, mode='train', shuffle=True, save_metric=False):
+        if len(idxs)%self.gpu_num!=0:
+            idxs = idxs[:-(len(idxs)%self.gpu_num)]
         id_idxs = np.arange(0, len(idxs))
         if shuffle:
             np.random.shuffle(id_idxs)
@@ -151,7 +160,7 @@ class TFModel(object):
                     self.test_writer.add_summary(summary, self.step_test)
                     self.step_test += 1
                 if (not shuffle) and isinstance(metr, np.ndarray) and save_metric:
-                    sampleMetrics[batch_idx] = metr
+                    sampleMetrics[id_idxs[idx:idx+self.batch_size]] = metr
             batchMetrics.append(metr*len(batch_idx) if isinstance(metr, np.float32) else np.sum(metr))       
             batchLoss.append(l*len(batch_idx) if isinstance(l, np.float32) else np.sum(l))
         batchMetrics = np.array(batchMetrics)
@@ -182,7 +191,7 @@ class TFModel(object):
             if self.__better__(epochTestMetric, best_test_metric): 
                 best_test_metric = epochTestMetric
                 if self.epoch_save:
-                    save_path = self.saver.save(self.sess, '{}/{}.ckpt'.format(self.model_dir,self.current_task_name))
+                    save_path = self.saver.save(self.sess, '{}{}.ckpt'.format(self.model_dir,self.current_task_name))
                     print("Model saved in file: %s" % save_path)
                     
             self.log_loss.append([epochLoss, epochTestLoss])

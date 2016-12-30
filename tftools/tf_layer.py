@@ -13,39 +13,29 @@ from tensorflow.python.ops import math_ops
 
 #my full connected layer
 def my_full_connected(input_tensor, input_dim, output_dim, add_bias=True,
-                      reuse=None, layer_name='fully_connected', act=tf.identity, init_std=0.05):
-    
-    with tf.name_scope(layer_name):
-        if reuse==None:
-            with tf.variable_scope('weights'):
-                #weights = tf.Variable(tf.truncated_normal([input_dim, output_dim], stddev=init_std))
-                weights = tf.Variable(tf.random_normal([input_dim, output_dim], stddev=init_std)) 
-        else:
-            with tf.variable_scope(layer_name + '/weights', reuse=reuse):
-                weights = tf.get_variable("W", [input_dim, output_dim], 
+                      layer_name='fully_connected', act=tf.identity, init_std=0.05, scope=None, reuse=False):
+    vscope = get_new_variable_scope(scope, layer_name, reuse=reuse)
+    with vscope as scope:
+        weights = tf.get_variable("W", [input_dim, output_dim], 
                                           initializer=tf.truncated_normal_initializer(stddev=init_std))  
         with tf.name_scope('Wx_plus_b'):
             preactivate = tf.matmul(input_tensor, weights) 
             if add_bias:
-                if reuse==None: 
-                    with tf.variable_scope('biases'):
-                        #biases =tf.Variable(tf.truncated_normal([output_dim], stddev=init_std))
-                        biases =tf.Variable(tf.random_normal([output_dim], stddev=init_std))
-                else:
-                    with tf.variable_scope(layer_name + '/biases', reuse=reuse):
-                        biases = tf.get_variable("B", [output_dim], initializer=tf.truncated_normal_initializer())
+                biases = tf.get_variable("B", [output_dim], initializer=tf.truncated_normal_initializer(stddev=init_std))
                 preactivate = preactivate + biases
-        activations = act(preactivate, name='activation')
-        return activations
+            activations = act(preactivate, name='activation')
+            return activations
     
-def my_embedding_layer(input_tensor, shape, embedding_size, 
-                       layer_name='embedding_layer', init_mean=0.0, init_std=0.05):
-    
-    with tf.name_scope(layer_name):
-        with tf.name_scope('embedding_table'):
-            embedding_table = tf.Variable(tf.truncated_normal([shape, embedding_size], init_mean, init_std))
+
+def my_embedding_layer(input_tensor, shape, embedding_size, layer_name='embedding_layer', 
+                       init_mean=0.0, init_std=0.05, scope = None, reuse=False):
+    vscope = get_new_variable_scope(scope, layer_name, reuse=reuse)
+    with vscope as scope:
+        embedding_table = tf.get_variable('embedding_table',[shape, embedding_size], 
+                                          initializer = tf.truncated_normal_initializer(mean=init_mean,stddev=init_std))
         input_embedding = tf.nn.embedding_lookup(embedding_table, input_tensor)
         return input_embedding
+
 
 def my_onehot_layer(input_tensor, shape, layer_name='embedding_layer'):
     with tf.name_scope(layer_name):
@@ -53,56 +43,51 @@ def my_onehot_layer(input_tensor, shape, layer_name='embedding_layer'):
         return input_one_hot   
 
 def my_conv_1d(input_tensor, conv_length, n_filters_out, add_bias=True,
-               stride_step=1, padding='SAME', layer_name='conv_1d', act=tf.nn.tanh):
+               stride_step=1, padding='SAME', layer_name='conv_1d', act=tf.nn.tanh, scope = None, reuse=False):
     n_filters_in = input_tensor.get_shape()[-1].value
-    with tf.name_scope(layer_name):
-        with tf.name_scope('filter_weights'):
-            #conv_W = tf.Variable(tf.random_normal([conv_length, n_filters_in, n_filters_out], stddev=init_std))
-            conv_W = he_uniform('W', [conv_length, n_filters_in, n_filters_out])
+    vscope = get_new_variable_scope(scope, layer_name, reuse=reuse)
+    with vscope as scope:
+        conv_W = he_uniform('W', [conv_length, n_filters_in, n_filters_out])
         with tf.name_scope('conv_1d_operation'):
             conv_x = tf.nn.conv1d(input_tensor, conv_W, stride=stride_step, padding=padding)
             if add_bias:
-                with tf.name_scope('filter_biases'):
-                    conv_b = tf.Variable(tf.random_normal([n_filters_out], stddev=init_std))
-                    conv_x = tf.nn.bias_add(conv_x, conv_b)
-        conv_x = act(conv_x, name='activation')
+                biases = tf.get_variable("B", [n_filters_out], initializer=tf.truncated_normal_initializer(stddev=init_std))
+                conv_x = tf.nn.bias_add(conv_x, conv_b)
+            conv_x = act(conv_x, name='activation')
         return conv_x
 
+
 def my_atrous_conv_1d(input_tensor, conv_length, n_filters_out, rate, add_bias=True,
-               padding='SAME', layer_name='atrous_conv_1d', act=tf.nn.tanh):
+               padding='SAME', layer_name='atrous_conv_1d', act=tf.nn.tanh, scope=None, reuse=False):
     n_filters_in = input_tensor.get_shape()[-1].value
-    with tf.name_scope(layer_name):
-        with tf.name_scope('filter_weights'):
-            #conv_W = tf.Variable(tf.random_normal([conv_length, n_filters_in, n_filters_out], stddev=init_std))
-            conv_W = he_uniform('W', [1, conv_length, n_filters_in, n_filters_out])
+    vscope = get_new_variable_scope(scope, layer_name, reuse=reuse)
+    with vscope as scope:
+        conv_W = he_uniform('W', [1, conv_length, n_filters_in, n_filters_out])
         if padding=='SAME':
             pad_len = (conv_length - 1) * rate
-            x = tf.expand_dims(tf.pad(input_tensor, [[0, 0], [pad_len, 0], [0, 0]]),1)    
+            x = tf.expand_dims(tf.pad(input_tensor, [[0, 0], [pad_len, 0], [0, 0]]),1) 
         with tf.name_scope('atrous_conv_1d_operation'):
             conv_x = tf.nn.atrous_conv2d(x, conv_W, rate=rate, padding='VALID')
             if add_bias:
-                with tf.name_scope('filter_biases'):
-                    conv_b = tf.Variable(tf.random_normal([n_filters_out], stddev=init_std))
-                    conv_x = tf.nn.bias_add(conv_x, conv_b)
-        conv_x = tf.squeeze(act(conv_x, name='activation'),[1])
+                biases = tf.get_variable("B", [n_filters_out], initializer=tf.truncated_normal_initializer(stddev=init_std))
+                conv_x = tf.nn.bias_add(conv_x, conv_b)
+            conv_x = tf.squeeze(act(conv_x, name='activation'),[1])
         return conv_x
 
 
 def my_conv_2d(input_tensor, shape, strides=[1,1,1,1], add_bias=True,
-               padding='SAME', layer_name='conv_2d',act=tf.nn.tanh, init_std=0.05):
+               padding='SAME', layer_name='conv_2d',act=tf.nn.tanh):
     #shape: [kernel_width, kernel_height, n_filters_in, n_filters_out]
-    with tf.name_scope(layer_name):
-        with tf.name_scope('filter_weights'):
-            conv_W = tf.Variable(tf.random_normal(shape, stddev=init_std))     
+    vscope = get_new_variable_scope(scope, layer_name, reuse=reuse)
+    with vscope as scope:
+        conv_W = he_uniform('W', shape)
         with tf.name_scope('conv_2d_operation'):
             conv_x = tf.nn.conv2d(input_tensor, conv_W, strides=strides, padding=padding)
             if add_bias:
-                with tf.name_scope('filter_biases'):
-                    conv_b = tf.Variable(tf.random_normal([shape[-1]], stddev=init_std))
-                    conv_x = tf.nn.bias_add(conv_x, conv_b)
+                biases = tf.get_variable("B", [shape[-1]], initializer=tf.truncated_normal_initializer(stddev=init_std))
+                conv_x = tf.nn.bias_add(conv_x, conv_b)
         conv_x = act(conv_x, name='activation')
         return conv_x
-
 
 def my_pool_layer_2d(input_tensor, k, stride = None, padding='VALID', layer_name='pool_2d', act=tf.nn.max_pool):
     with tf.name_scope(layer_name):
@@ -122,21 +107,19 @@ def my_flatten(input_tensor, layer_name='flatten'):
             return input_tensor
         
 def my_batch_norm(input_tensor, training, recurrent=False, epsilon=1e-3, decay=0.999, layer_name='bn_layer'):
-    with tf.variable_scope(layer_name):
-        x_shape = input_tensor.get_shape()
-        axis = list(range(len(x_shape) - 1))
-        params_shape = x_shape[-1:]
-        if recurrent:
-            scale = tf.get_variable('scale', params_shape, initializer=tf.constant_initializer(1.0))
-            offset = tf.get_variable('offset', params_shape, initializer=tf.constant_initializer(0.0))
-            pop_mean = tf.get_variable('pop_mean', params_shape, initializer=tf.constant_initializer(0), trainable=False)
-            pop_var = tf.get_variable('pop_var', params_shape, initializer=tf.constant_initializer(1.0), trainable=False)
-        else:
-            scale = tf.Variable(tf.ones(params_shape), name='scale')
-            offset = tf.Variable(tf.zeros(params_shape), name='offset')
-            pop_mean = tf.Variable(tf.zeros(params_shape), trainable=False, name='pop_mean')
-            pop_var = tf.Variable(tf.ones(params_shape), trainable=False, name='pop_var')   
-       
+    if recurrent:
+        vscope = get_new_variable_scope(None,scope=layer_name)
+    else:
+        vscope = get_new_variable_scope(layer_name)
+    x_shape = input_tensor.get_shape()
+    axis = list(range(len(x_shape) - 1))
+    params_shape = x_shape[-1:]
+    with vscope as scope:    
+        scale = tf.get_variable('scale', params_shape, initializer=tf.constant_initializer(1.0))
+        offset = tf.get_variable('offset', params_shape, initializer=tf.constant_initializer(0.0))
+        pop_mean = tf.get_variable('pop_mean', params_shape, initializer=tf.constant_initializer(0), trainable=False)
+        pop_var = tf.get_variable('pop_var', params_shape, initializer=tf.constant_initializer(1.0), trainable=False)
+      
         batch_mean, batch_var = tf.nn.moments(input_tensor, axis)    
         train_mean = tf.assign(pop_mean, pop_mean * decay + batch_mean * (1 - decay))
         train_var = tf.assign(pop_var, pop_var * decay + batch_var * (1 - decay))

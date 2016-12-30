@@ -3,6 +3,11 @@ import tensorflow as tf
 from tensorflow.python.ops import nn_ops
 from tensorflow.python.ops.rnn_cell import RNNCell,LSTMCell,LSTMStateTuple
 
+
+def get_new_variable_scope(name, scope=None, reuse=False):
+    vscope = tf.variable_scope(scope, default_name=name, reuse=reuse)
+    return vscope
+    
 #summary for scalar
 def variable_summaries(var, name):
     with tf.name_scope('summaries'):
@@ -15,7 +20,8 @@ def variable_summaries(var, name):
         tf.summary.scalar('min/' + name.replace(':', '_'), tf.reduce_min(var))
         tf.summary.histogram(name.replace(':', '_'), var)
 
-def my_minimize_loss(opt, loss, params, clip_type=None, max_clip_grad=1.0, dependency=None):
+        
+def my_compute_grad(opt, loss, params, clip_type=None, max_clip_grad=1.0):
     grads = opt.compute_gradients(loss, params)
     #Processing gradients before applying them
     if clip_type == 'clip_value':
@@ -27,6 +33,10 @@ def my_minimize_loss(opt, loss, params, clip_type=None, max_clip_grad=1.0, depen
         capped_gvs = list(zip(capped_gvs, params))
     else:
         capped_gvs = grads
+    return grads, capped_gvs
+        
+def my_minimize_loss(opt, loss, params, clip_type=None, max_clip_grad=1.0, dependency=None):
+    grads, capped_gvs = my_compute_grad(opt, loss, params, clip_type, max_clip_grad)
     if dependency == None:
         optim = opt.apply_gradients(capped_gvs)
     else:
@@ -122,9 +132,45 @@ def he_uniform(name, shape, scale=1, dtype=tf.float32):
     fin, _ = _get_fans(shape)
     s = np.sqrt(1. * scale / fin)
     shape = shape if isinstance(shape, (tuple, list)) else [shape]
-    W = tf.Variable(tf.random_uniform(shape, minval=-s, maxval=s),dtype=dtype,name=name)
-    #w = tf.get_variable(name, shape, dtype=dtype,initializer=tf.random_uniform_initializer(minval=-s, maxval=s))
+    #W = tf.Variable(tf.random_uniform(shape, minval=-s, maxval=s),dtype=dtype,name=name)
+    w = tf.get_variable(name, shape, dtype=dtype,initializer=tf.random_uniform_initializer(minval=-s, maxval=s))
     return W
+
+def average_gradients(tower_grads):
+    """Calculate the average gradient for each shared variable across all towers.
+    Note that this function provides a synchronization point across all towers.
+    Args:
+    tower_grads: List of lists of (gradient, variable) tuples. The outer list
+      is over individual gradients. The inner list is over the gradient
+      calculation for each tower.
+    Returns:
+     List of pairs of (gradient, variable) where the gradient has been averaged
+     across all towers.         
+    """
+    average_grads = []
+    for grad_and_vars in zip(*tower_grads):
+        # Note that each grad_and_vars looks like the following:
+        #   ((grad0_gpu0, var0_gpu0), ... , (grad0_gpuN, var0_gpuN))
+        grads = []
+        for g, _ in grad_and_vars:
+            # Add 0 dimension to the gradients to represent the tower.
+            expanded_g = tf.expand_dims(g, 0)
+
+            # Append on a 'tower' dimension which we will average over below.
+            grads.append(expanded_g)
+
+        # Average over the 'tower' dimension.
+        grad = tf.concat(0, grads)
+        grad = tf.reduce_mean(grad, 0)
+
+        # Keep in mind that the Variables are redundant because they are shared
+        # across towers. So .. we will just return the first tower's pointer to
+        # the Variable.
+        v = grad_and_vars[0][1]
+        grad_and_var = (grad, v)
+        average_grads.append(grad_and_var)
+        #average_grads = [(None if grad is None else tf.clip_by_norm(grad, max_grad_norm), var) for grad, var in average_grads]                     
+    return average_grads
 
 ########################################################################################################
 class ZoneoutWrapper(LSTMCell):

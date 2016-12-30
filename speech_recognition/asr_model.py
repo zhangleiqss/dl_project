@@ -36,7 +36,8 @@ class ASRBaseModel(TFModel):
         feedDict[input_var[1]] = input_list[1][batch_idx] #seqLengths
         feedDict[input_var[2]], feedDict[input_var[3]], feedDict[input_var[4]] = target_list_to_sparse_tensor(input_list[2][batch_idx])
         feedDict[input_var[5]] = (mode=='train')       
-        return feedDict    
+        return feedDict
+    
     def build_input_graph(self):       
         with tf.device(self.gpu_option): 
             with tf.name_scope('input'):
