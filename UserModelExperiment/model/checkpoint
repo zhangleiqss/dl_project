@@ -1,2 +1,0 @@
-model_checkpoint_path: "memn2n_url_prediction.ckpt"
-all_model_checkpoint_paths: "memn2n_url_prediction.ckpt"
