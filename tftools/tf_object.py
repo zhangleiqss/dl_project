@@ -21,9 +21,11 @@ class TFModel(object):
         self.current_task_name = 'tf_models'
         #self.current_task_name = config.current_task_name
         if not os.path.isdir(self.logs_dir):
-            raise Exception(" [!] Directory %s not found" % self.logs_dir)
+            os.makedirs(self.logs_dir)
+            #raise Exception(" [!] Directory %s not found" % self.logs_dir)
         if not os.path.isdir(self.model_dir):
-            raise Exception(" [!] Directory %s not found" % self.model_dir)
+            os.makedirs(self.model_dir)
+            #raise Exception(" [!] Directory %s not found" % self.model_dir)
             
         self.dir_clear = config.dir_clear
         if self.dir_clear:
@@ -36,33 +38,36 @@ class TFModel(object):
         self.summary_step = 0
         self.saver = None
         self.metric_name = 'accuracy'
-        #self.gpu_option = '/gpu:{}'.format(config.gpu_id)
         self.gpu_option = config.gpu_id
         self.gpu_num = config.gpu_num
-        self.gpus = range(config.gpu_num) if config.gpu_num > 0 else [config.gpu_id]
+        #self.gpus = range(config.gpu_num) if config.gpu_num > 1 else [config.gpu_id]
+        self.gpus = range(config.gpu_id, config.gpu_id+config.gpu_num)
         
         self.lr_annealing = config.lr_annealing
         self.lr_annealing_value = 1.5
         self.lr_stop_value = 1e-5
         
+        #for summary
         self.loss_list = []
-        self.params_list = []
         self.optim_list = []  
         self.grad_list = []
         self.capped_grad_list = []
         self.metrics_list = []
         self.log_loss = []
-        self.tower_grads = []
-        self.tower_capped_gvs = []
-        self.tower_loss = []
-        self.tower_metrics = []
-        self.fetch_dict = {}
+        #for multiple gpus
+        self.tower_grads = {}
+        self.tower_capped_gvs = {}
+        self.tower_loss = {}
+        self.tower_metrics = {}
+        self.tower_prediction_results = []
+        self.params = None
+        self.prediction_results = None
         self.lr = None
+        self.fetch_dict = {}        
         tf.GraphKeys.INPUTS = 'inputs'
         
-    def __add_details__(self, loss, params, optim, grads, capped_gvs, metric):
+    def __add_details__(self, loss, optim, grads, capped_gvs, metric):
         self.loss_list.append(loss)
-        self.params_list.append(params)
         self.optim_list.append(optim)
         self.grad_list.append(grads)
         self.capped_grad_list.append(capped_gvs)
@@ -84,11 +89,60 @@ class TFModel(object):
         return feedDict
     
     def __get_parameters_num__(self, shape_list):
-        num = 1L
+        num = 1
         for l in shape_list:
             num *= l
         return num
-
+    
+    def __add_to_graph_input__(self, input_list):
+        for each_input in input_list:
+            tf.add_to_collection(tf.GraphKeys.INPUTS, each_input)
+    
+    def __build_global_setting__(self):
+        with tf.name_scope('global'):
+            self.global_step = tf.get_variable('global_step', [], initializer=tf.constant_initializer(0), trainable=False)
+            self.lr = tf.Variable(self.learning_rate)
+            self.opt = tf.train.AdamOptimizer(self.lr)
+    
+    def __init_tower_list__(self, type):
+        self.tower_grads[type] = []
+        self.tower_capped_gvs[type] = []
+        self.tower_loss[type] = []
+        self.tower_metrics[type] = []
+               
+    def __add_to_tower_list__(self, grads, capped_gvs, loss, metric, type='self'):
+        if type not in self.tower_grads:
+            self.__init_tower_list__(type)
+        self.tower_grads[type].append(grads)
+        self.tower_capped_gvs[type].append(capped_gvs)
+        self.tower_loss[type].append(loss)
+        self.tower_metrics[type].append(metric)
+    
+    #aggregate the gradient, loass, metrics
+    def build_model_aggregation(self):
+        for key in self.tower_grads.keys():
+            grads_avg = average_gradients(self.tower_grads[key])
+            capped_gvs_avg = average_gradients(self.tower_capped_gvs[key])
+            if len(self.tower_loss[key][0].shape) == 0:
+                loss = tf.reduce_mean(self.tower_loss[key])
+            else:
+                loss = tf.concat(self.tower_loss[key], 0)
+            if len(self.tower_metrics[key][0].shape) == 0:
+                metric = tf.reduce_mean(self.tower_metrics[key])
+            else:
+                metric = tf.concat(self.tower_metrics[key], 0)
+            train_op = self.opt.apply_gradients(capped_gvs_avg, global_step=self.global_step)
+            self.__add_details__(loss, train_op, grads_avg, capped_gvs_avg, metric)  
+            self.fetch_dict['{}_prediction'.format(key)] = [train_op, loss, metric]
+        if len(self.tower_prediction_results) != 0:
+            self.prediction_results = []
+            for i in range(0, int(len(self.tower_prediction_results)/self.gpu_num)):
+                temp = [self.tower_prediction_results[i] for i in range(i, len(self.tower_prediction_results), int(len(self.tower_prediction_results)/self.gpu_num))]
+                self.prediction_results.append(tf.concat(temp, 0))
+            if len(self.prediction_results) == 1:
+                self.prediction_results = self.prediction_results[0]
+        
+            
     def build_model_summary(self, summary_step=0):
         for var in tf.trainable_variables():
             tf.summary.histogram(var.name.replace(':', '_'), var)
@@ -108,7 +162,11 @@ class TFModel(object):
         print('Initializing')
         self.saver = tf.train.Saver()
         self.summary_step = summary_step
+        #with self.sess.graph.as_default():
+        #self.sess.run(tf.global_variables_initializer())
+        #self.sess.run(tf.local_variables_initializer())
         tf.global_variables_initializer().run()
+        tf.local_variables_initializer().run()
     
     def model_summary(self):
         columns = ['variable_name','variable_shape', 'parameters']
@@ -134,15 +192,18 @@ class TFModel(object):
             np.random.shuffle(id_idxs)
         batchMetrics = []
         batchLoss = []
-        sampleMetrics = np.empty(shape=(len(idxs)))
+        #samplePreds = np.empty(shape=(len(idxs)))
+        samplePreds = []
         input_var = tf.get_collection(tf.GraphKeys.INPUTS)
         for i, idx in enumerate(range(0, len(idxs), self.batch_size)):
             batch_idx = np.sort(idxs[id_idxs[idx:idx+self.batch_size]]).tolist()
+            #batch_idx = idxs[id_idxs[idx:idx+self.batch_size]]
             feedDict = self.__get_feed_dict__(input_list, input_var, batch_idx, mode)
             #feedDict = {}
             #for j in range(len(input_list)):
             #    feedDict[input_var[j]] = input_list[j][batch_idx]
             if mode == 'train':
+                #print('model training...')
                 if self.summary_step==0 or i%self.summary_step!=0:
                     _, l, metr = self.sess.run(self.fetch_dict['{}_prediction'.format(run_type)][0:3], feed_dict=feedDict)
                 else:
@@ -152,21 +213,31 @@ class TFModel(object):
                 if i>0 and i%self.print_step == 0:
                     print('Minibatch', i, '/', 'loss:', l if isinstance(l, np.float32) else np.mean(l))
                     print('Minibatch', i, '/', '{}:'.format(self.metric_name), metr if isinstance(metr, np.float32) else np.mean(metr))
-            else:
+            else:  #test
+                #print('model testing...')
                 if self.summary_step==0 or i%self.summary_step!=0:
                     l, metr = self.sess.run(self.fetch_dict['{}_prediction'.format(run_type)][1:3], feed_dict=feedDict)
                 else:
                     l, metr, summary = self.sess.run(self.fetch_dict['{}_prediction'.format(run_type)][1:], feed_dict=feedDict)
                     self.test_writer.add_summary(summary, self.step_test)
                     self.step_test += 1
-                if (not shuffle) and isinstance(metr, np.ndarray) and save_metric:
-                    sampleMetrics[id_idxs[idx:idx+self.batch_size]] = metr
+                if i>0 and i%self.print_step == 0:
+                    print('Minibatch', i, '/', 'loss:', l if isinstance(l, np.float32) else np.mean(l))
+                    print('Minibatch', i, '/', '{}:'.format(self.metric_name), metr if isinstance(metr, np.float32) else np.mean(metr))
+                if (not shuffle) and save_metric:
+                    #print('get results...')
+                    if self.prediction_results is not None:
+                        preds = self.sess.run(self.prediction_results, feed_dict=feedDict)
+                        samplePreds.append(preds)
+                        #sampleMetrics[id_idxs[idx:idx+self.batch_size]] = preds
             batchMetrics.append(metr*len(batch_idx) if isinstance(metr, np.float32) else np.sum(metr))       
             batchLoss.append(l*len(batch_idx) if isinstance(l, np.float32) else np.sum(l))
+            #if len(samplePreds) != 0:
+            #    samplePreds = np.concatenate(samplePreds)
         batchMetrics = np.array(batchMetrics)
         epochAcc = np.array(batchMetrics).sum() / len(id_idxs)
         epochLoss = np.array(batchLoss).sum() / len(id_idxs)
-        return epochLoss, epochAcc, sampleMetrics
+        return epochLoss, epochAcc, samplePreds
             
             
     def run(self, input_list, train_idxs, test_idxs, run_type='self', shuffle=True):
@@ -210,5 +281,5 @@ class TFModel(object):
                 if len(self.log_loss) > 1 and self.log_loss[epoch][1] > self.log_loss[epoch-1][1] * 0.9999:
                     self.learning_rate = self.learning_rate / self.lr_annealing_value
                     self.lr.assign(self.learning_rate).eval()
-            if self.lr_annealing and self.lr_stop_value < 1e-5: break
+            if self.lr_annealing and self.learning_rate < self.lr_stop_value: break
             

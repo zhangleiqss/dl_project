@@ -1,10 +1,18 @@
 import numpy as np
 import tensorflow as tf
+import shutil
+import os
+from sklearn import metrics
+from sklearn.metrics import roc_auc_score,f1_score
 from tensorflow.python.ops import nn_ops
-from tensorflow.python.ops.rnn_cell import RNNCell,LSTMCell,LSTMStateTuple
+from tensorflow.contrib.rnn.python.ops.core_rnn_cell import RNNCell,LSTMCell,LSTMStateTuple
+#from tensorflow.python.ops.rnn_cell import RNNCell,LSTMCell,LSTMStateTuple
+import h5py
 
-
+###########################################################################
 def get_new_variable_scope(name, scope=None, reuse=False):
+    if reuse==True and scope==None:
+        scope = name
     vscope = tf.variable_scope(scope, default_name=name, reuse=reuse)
     return vscope
     
@@ -44,39 +52,48 @@ def my_minimize_loss(opt, loss, params, clip_type=None, max_clip_grad=1.0, depen
             optim = opt.apply_gradients(capped_gvs)
     return optim, grads, capped_gvs
 
-############################################################################################
+################     loss and accuracy      ###############################################
 #the seq loss for the targets which have variable length
 #y_pred shape: [None, maxlen, nb_classes]    y_true shape: [None, maxlen]
-def variable_seq_loss(y_pred, y_true):
-    cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(y_pred, y_true)
+def variable_seq_loss(y_pred, y_true, lm_flag=False):
+    #cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(y_pred, y_true)
+    cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=y_true, logits=y_pred)
     mask = tf.to_float(tf.sign(tf.abs(y_true)))
+    if lm_flag:
+        mask = tf.concat([tf.ones_like(mask[:,0:1]),tf.slice(mask,[0,0],[-1,mask.shape[-1].value-1])],1)
     cross_entropy *= mask
-    cross_entropy = tf.reduce_sum(cross_entropy, reduction_indices=1)
-    cross_entropy /= tf.reduce_sum(mask, reduction_indices=1)
+    cross_entropy = tf.reduce_sum(cross_entropy, 1)
+    cross_entropy /= tf.reduce_sum(mask, 1)
     seq_loss = tf.reduce_mean(cross_entropy,0)
     return seq_loss
 
 #the accuracy for the targets which have variable length
-def varibale_accuracy(y_pred, y_true):
+def varibale_accuracy(y_pred, y_true, lm_flag=False):
     pred_idx = tf.to_int32(tf.argmax(y_pred, 2))
     accuracy_flag = tf.to_float(tf.equal(pred_idx, y_true))
     mask = tf.to_float(tf.sign(tf.abs(y_true)))
+    if lm_flag:
+        mask = tf.concat([tf.ones_like(mask[:,0:1]),tf.slice(mask,[0,0],[-1,mask.shape[-1].value-1])],1)
     accuracy_flag *= mask
     accuracy = tf.reduce_sum(accuracy_flag)/tf.reduce_sum(mask) 
     return accuracy
 
-def varibale_topk_accuracy(y_pred, y_true, k):
+def varibale_topk_accuracy(y_pred, y_true, k, lm_flag=False):
     y_pred_new = tf.reshape(y_pred, [-1, y_pred.get_shape()[2].value])
     y_true_new = tf.reshape(y_true, [-1])
     accuracy_flag = tf.to_float(tf.nn.in_top_k(y_pred_new,y_true_new,k=k))
-    mask = tf.to_float(tf.sign(tf.abs(y_true_new)))
+    mask = tf.to_float(tf.sign(tf.abs(y_true)))
+    if lm_flag:
+        mask = tf.concat([tf.ones_like(mask[:,0:1]),tf.slice(mask,[0,0],[-1,mask.shape[-1].value-1])],1)
+    mask = tf.reshape(mask, [-1])
     accuracy_flag *= mask
     tok_accuracy = tf.reduce_sum(accuracy_flag)/tf.reduce_sum(mask) 
     return tok_accuracy
 
 def variable_set_accuracy_1d(y_pred, y_true):
     mask = tf.not_equal(tf.zeros_like(y_true), y_true)
-    diff = tf.listdiff(tf.boolean_mask(y_pred,mask),tf.boolean_mask(y_true,mask))
+    diff = tf.setdiff1d(tf.boolean_mask(y_pred,mask),tf.boolean_mask(y_true,mask))   
+    #diff = tf.listdiff(tf.boolean_mask(y_pred,mask),tf.boolean_mask(y_true,mask))
     accuracy = 1 - tf.reduce_sum(tf.to_float(tf.ones_like(diff.idx)))/tf.reduce_sum(tf.to_float(mask))
     return accuracy
 
@@ -98,9 +115,9 @@ def reset_nan(input_tensor, number=1e-5):
 
 def print_varaible_shape_summary():
     for var in tf.trainable_variables():
-        print var.name, var.get_shape() 
+        print(var.name, var.get_shape()) 
         
-##########################################################################################################
+#######################################################################################################
 def _get_fans(shape):
     """Returns values of input dimension and output dimension, given `shape`.
     
@@ -132,9 +149,11 @@ def he_uniform(name, shape, scale=1, dtype=tf.float32):
     fin, _ = _get_fans(shape)
     s = np.sqrt(1. * scale / fin)
     shape = shape if isinstance(shape, (tuple, list)) else [shape]
-    #W = tf.Variable(tf.random_uniform(shape, minval=-s, maxval=s),dtype=dtype,name=name)
-    w = tf.get_variable(name, shape, dtype=dtype,initializer=tf.random_uniform_initializer(minval=-s, maxval=s))
-    return W
+    vscope = get_new_variable_scope('he_uniform')
+    with vscope as scope:
+        #print scope.name
+        W = tf.get_variable(name, shape, dtype=dtype,initializer=tf.random_uniform_initializer(minval=-s, maxval=s))
+        return W
 
 def average_gradients(tower_grads):
     """Calculate the average gradient for each shared variable across all towers.
@@ -160,7 +179,8 @@ def average_gradients(tower_grads):
             grads.append(expanded_g)
 
         # Average over the 'tower' dimension.
-        grad = tf.concat(0, grads)
+        #grad = tf.concat(0, grads)
+        grad = tf.concat(grads, 0)
         grad = tf.reduce_mean(grad, 0)
 
         # Keep in mind that the Variables are redundant because they are shared
@@ -172,47 +192,30 @@ def average_gradients(tower_grads):
         #average_grads = [(None if grad is None else tf.clip_by_norm(grad, max_grad_norm), var) for grad, var in average_grads]                     
     return average_grads
 
-########################################################################################################
-class ZoneoutWrapper(LSTMCell):
-    def __init__(self, cell, training, state_out_prob=0.0, cell_out_prob=0.0, seed=None):
-        if not isinstance(cell, LSTMCell):
-            raise TypeError("The parameter cell is not a RNNCell.")
-        if (isinstance(state_out_prob, float) and
-            not (state_out_prob >= 0.0 and state_out_prob <= 1.0)):
-            raise ValueError("Parameter state_out_prob must be between 0 and 1: %d"
-                       % state_out_prob)
-        if (isinstance(cell_out_prob, float) and
-            not (cell_out_prob >= 0.0 and cell_out_prob <= 1.0)):
-            raise ValueError("Parameter cell_out_prob must be between 0 and 1: %d"
-                       % cell_out_prob)
-        self._cell = cell
-        self._state_out_prob = state_out_prob
-        self._cell_out_prob = cell_out_prob
-        self._seed = seed
-        self._training = training
-    
-    @property
-    def state_size(self):
-        return self._cell.state_size
+###################################################################################################
+def target_list_to_sparse_tensor(targetList):
+    '''make tensorflow SparseTensor from list of targets, with each element
+       in the list being a list or array with the values of the target sequence
+       (e.g., the integer values of a character map for an ASR target string)
+       See https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/ctc/ctc_loss_op_test.py
+       for example of SparseTensor format'''
+    indices = []
+    vals = []
+    for tI, target in enumerate(targetList):
+        for seqI, val in enumerate(target):
+            indices.append([tI, seqI])
+            vals.append(val)
+    shape = [len(targetList), np.asarray(indices).max(0)[1]+1]
+    return (np.array(indices), np.array(vals), np.array(shape))
 
-    @property
-    def output_size(self):
-        return self._cell.output_size
+def model_logger_dir_prepare(logs_dir, model_dir, current_name):
+    if os.path.exists(logs_dir + current_name):
+        shutil.rmtree(logs_dir  + current_name)
+    os.makedirs(logs_dir  + current_name)
+    if os.path.exists(model_dir + current_name):
+        shutil.rmtree(model_dir  + current_name)
+    os.makedirs(model_dir + current_name)
 
-    def __call__(self, inputs, state, scope=None):
-        output, new_state = self._cell(inputs, state, scope)
-        def train():
-            cell_update = nn_ops.dropout(state[0], self._cell_out_prob, seed=self._seed) + nn_ops.dropout(new_state[0], 1-self._cell_out_prob, seed=self._seed)
-            state_update = nn_ops.dropout(state[1], self._state_out_prob, seed=self._seed) + nn_ops.dropout(new_state[1], 1-self._state_out_prob, seed=self._seed)
-            return cell_update, state_update
-        
-        def test():
-            cell_update = state[0] * self._cell_out_prob + new_state[0] * (1-self._cell_out_prob)
-            state_update = state[1] * self._state_out_prob + new_state[1] * (1-self._state_out_prob)
-            return cell_update, state_update
-
-        cell_update, state_update = tf.cond(self._training,train,test)
-        new_state_update = LSTMStateTuple(cell_update,state_update)      
-        return output, new_state_update
-
+def best_fscore(y_true, pred, labels=[1]):
+    return np.max([f1_score(y_true, pred>x, labels=labels) for x in np.arange(0.001, 1, 0.001)])
     

@@ -1,0 +1,2 @@
+model_checkpoint_path: "user2vec_model.ckpt"
+all_model_checkpoint_paths: "user2vec_model.ckpt"
