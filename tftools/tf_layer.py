@@ -12,7 +12,44 @@ from tensorflow.python.ops import clip_ops
 from tensorflow.python.ops import math_ops
 from functools import reduce
 from tensorflow.python.training import moving_averages
+from tensorflow.contrib.rnn.python.ops import rnn_cell
+import collections
 
+
+def _is_sequence(seq):
+    return (isinstance(seq, collections.Sequence)
+          and not isinstance(seq, six.string_types))
+
+def _linear(args, output_size, bias, bias_start=0.0, scope=None):
+    if args is None or (_is_sequence(args) and not args):
+        raise ValueError("`args` must be specified")
+    if not _is_sequence(args):
+        args = [args]
+  
+    # Calculate the total size of arguments on dimension 1.
+    total_arg_size = 0
+    shapes = [a.get_shape().as_list() for a in args]
+    for shape in shapes:
+        if len(shape) != 2:
+            raise ValueError("Linear is expecting 2D arguments: %s" % str(shapes))
+        if not shape[1]:
+            raise ValueError("Linear expects shape[1] of arguments: %s" % str(shapes))
+        else:
+            total_arg_size += shape[1]
+  
+    # Now the computation.
+    with vs.variable_scope(scope or "Linear"):
+        matrix = vs.get_variable("Matrix", [total_arg_size, output_size])
+        if len(args) == 1:
+            res = math_ops.matmul(args[0], matrix)
+        else:
+            res = math_ops.matmul(array_ops.concat(1, args), matrix)
+        if not bias:
+            return res
+        bias_term = vs.get_variable(
+          "Bias", [output_size],
+          initializer=init_ops.constant_initializer(bias_start))
+        return res + bias_term 
 
 #full connected layer
 def my_full_connected(input_tensor, output_dim, add_bias=True,
@@ -141,6 +178,24 @@ def my_flatten(input_tensor, layer_name='flatten'):
             return flatten_layer
         else:
             return input_tensor
+
+"""
+ Highway Network (cf. http://arxiv.org/abs/1505.00387).
+  t = sigmoid(Wy + b)
+  z = t * g(Wy + b) + (1 - t) * y
+  where g is nonlinearity, t is transform gate, and (1 - t) is carry gate.
+ """
+def highway(input_, layer_size=1, bias=0, f=tf.nn.relu, layer_name='highway',scope=None, reuse=False):
+    output = input_
+    size = input_.get_shape()[-1]
+    vscope = get_new_variable_scope(layer_name, scope, reuse=reuse)
+    with vscope as scope:
+        for idx in range(layer_size):
+            output = f(_linear(output, size, 0, scope='output_lin_%d' % idx))
+            transform_gate = tf.sigmoid(_linear(input_, size, 0, scope='transform_lin_%d' % idx) + bias)
+            carry_gate = 1. - transform_gate
+            output = transform_gate * output + carry_gate * input_
+        return output
         
 def my_batch_norm(input_tensor, training, recurrent=False, epsilon=1e-3, decay=0.999, layer_name='bn_layer'):
     if recurrent:

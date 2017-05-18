@@ -16,8 +16,8 @@ class TextCNN(TFModel):
         with tf.name_scope('input'):
             inputX = tf.placeholder(tf.int32, [None, self.maxlen], name="input_sentence")
             inputLabel = tf.placeholder(tf.int32, [None], name='label')
-            tf.add_to_collection(tf.GraphKeys.INPUTS,  inputX)
-            tf.add_to_collection(tf.GraphKeys.INPUTS,  inputLabel)
+            tf.add_to_collection(tf.GraphKeys.INPUTS, inputX)
+            tf.add_to_collection(tf.GraphKeys.INPUTS, inputLabel)
             self.split_inputX = tf.split(inputX, self.gpu_num, 0)
             self.split_inputLabel = tf.split(inputLabel, self.gpu_num, 0)
         self.__build_global_setting__()
@@ -98,9 +98,49 @@ class TextMultiCNN(TextCNN):
         last_flatten = my_flatten(last_conv)
         for idx, fc in enumerate(fully_layers):
             flatten = my_full_connected(last_flatten, fc, act=tf.nn.relu)
-            last_flatten = tf.nn.dropout(flatten, dropout_keep_prob)
+            last_flatten = tf.nn.dropout(highway(flatten), dropout_keep_prob)
         self.pool_flat_drop_list[gpu_id] = last_flatten
                     
 
+class TextMultiClassCNN(TextMultiCNN):
+    def __init__(self, config, sess, current_task_name='text_multi_class_cnn_emotion'):
+        super(TextMultiClassCNN, self).__init__(config, sess, current_task_name) 
+    
+    def build_input(self, num_classes):
+        with tf.name_scope('input'):
+            inputX = tf.placeholder(tf.int32, [None, self.maxlen], name="input_sentence")
+            inputLabel = tf.placeholder(tf.float32, [None, num_classes], name='label')
+            tf.add_to_collection(tf.GraphKeys.INPUTS,  inputX)
+            tf.add_to_collection(tf.GraphKeys.INPUTS,  inputLabel)
+            self.split_inputX = tf.split(inputX, self.gpu_num, 0)
+            self.split_inputLabel = tf.split(inputLabel, self.gpu_num, 0)
+        self.__build_global_setting__()
+        with tf.name_scope('states_array'):
+            self.pool_flat_drop_list = [[] for i in range(0,self.gpu_num)]
             
+    def build_prediction(self, gpu_id=0, num_classes=6):
+        prediction = my_full_connected(self.pool_flat_drop_list[gpu_id], num_classes)
+        self.tower_prediction_results.append(tf.nn.softmax(prediction))
+        self.params = tf.trainable_variables()[1:]
+        with tf.name_scope('loss'): 
+            loss = tf.nn.softmax_cross_entropy_with_logits(labels=self.split_inputLabel[gpu_id], logits=prediction)
+            #loss = tf.square(tf.nn.softmax(prediction) - self.split_inputLabel[gpu_id])
+            grads, capped_gvs = my_compute_grad(self.opt, loss, self.params, 
+                                                clip_type = 'clip_norm', 
+                                                max_clip_grad=self.clip_gradients)           
+        #this metrics need to be redefined....
+        with tf.name_scope('accuracy'):
+            accuracy = tf.to_float(tf.nn.in_top_k(prediction, tf.argmax(self.split_inputLabel[gpu_id],axis=1),k=2))
+        self.__add_to_tower_list__(grads,capped_gvs,loss,accuracy)
+        
+    #def build_model(self, num_classes=6, *args, **kwargs):
+    #    self.build_input(num_classes)
+    #    for idx, gpu_id in enumerate(self.gpus):
+    #        with tf.device('/gpu:%d' % gpu_id):
+    #            with tf.name_scope('Tower_%d' % (gpu_id)) as tower_scope:
+    #                gpu_scope = tf.variable_scope('gpu', reuse=(idx!=0))
+    #               with gpu_scope as gpu_scope:
+    #                    self.build_cnn_model(gpu_id=idx, *args, **kwargs)
+    #                    self.build_prediction(gpu_id=idx, num_classes=num_classes)                       
+    #    self.build_model_aggregation()            
                         

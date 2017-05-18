@@ -43,6 +43,11 @@ class TFModel(object):
         #self.gpus = range(config.gpu_num) if config.gpu_num > 1 else [config.gpu_id]
         self.gpus = range(config.gpu_id, config.gpu_id+config.gpu_num)
         
+        if hasattr(config,'opt'):
+            self.opt = config.opt.lower()
+        else:
+            self.opt = 'adam'
+            
         self.lr_annealing = config.lr_annealing
         self.lr_annealing_value = 1.5
         self.lr_stop_value = 1e-5
@@ -102,7 +107,12 @@ class TFModel(object):
         with tf.name_scope('global'):
             self.global_step = tf.get_variable('global_step', [], initializer=tf.constant_initializer(0), trainable=False)
             self.lr = tf.Variable(self.learning_rate)
-            self.opt = tf.train.AdamOptimizer(self.lr)
+            if self.opt == 'sgd':
+                self.opt = tf.train.GradientDescentOptimizer(self.lr)
+            elif self.opt == 'rmsprop':
+                self.opt = tf.train.RMSPropOptimizer(self.lr, momentum=0.9)
+            else:
+                self.opt = tf.train.AdamOptimizer(self.lr)
     
     def __init_tower_list__(self, type):
         self.tower_grads[type] = []
