@@ -98,7 +98,8 @@ class TextMultiCNN(TextCNN):
         last_flatten = my_flatten(last_conv)
         for idx, fc in enumerate(fully_layers):
             flatten = my_full_connected(last_flatten, fc, act=tf.nn.relu)
-            last_flatten = tf.nn.dropout(highway(flatten), dropout_keep_prob)
+            last_flatten = tf.nn.dropout(flatten, dropout_keep_prob)
+            #last_flatten = tf.nn.dropout(highway(flatten), dropout_keep_prob)
         self.pool_flat_drop_list[gpu_id] = last_flatten
                     
 

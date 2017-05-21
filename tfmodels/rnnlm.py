@@ -1,13 +1,13 @@
 #from text_utils import *
-from tensorflow.contrib.rnn.python.ops import core_rnn_cell as rnn_cell
-from tensorflow.python.ops.rnn import bidirectional_dynamic_rnn,dynamic_rnn
-from sklearn.model_selection import train_test_split
-import pickle as pkl
-
 import h5py
 import sys
 sys.path.append('../tftools')
 from tf_object import *
+
+from tensorflow.contrib.rnn.python.ops import core_rnn_cell as rnn_cell
+from tensorflow.python.ops.rnn import bidirectional_dynamic_rnn,dynamic_rnn
+from sklearn.model_selection import train_test_split
+import pickle as pkl
 
 
 class RNNLMModel(TFModel):
@@ -58,11 +58,11 @@ class RNNLMModel(TFModel):
             self.input_embedding = my_embedding_layer(self.split_inputX[gpu_id], self.nb_words, self.embedding_size, 
                                                  layer_name='embedding_layer', init_scale=self.init_scale)
      
-    def build_input_sequence(self, gpu_id=0):
+    def build_input_sequence(self, gpu_id=0, reuse=None):
         #embedding layer
         self.__build_embedding_layer__()
         with get_new_variable_scope('rnn_lstm') as rnn_scope:
-            single_cell = rnn_cell.LSTMCell(self.hidden_size, use_peepholes=True, state_is_tuple=True)
+            single_cell = rnn_cell.LSTMCell(self.hidden_size, use_peepholes=True, state_is_tuple=True, reuse=reuse)
             single_cell = rnn_cell.DropoutWrapper(single_cell, input_keep_prob=self.keep_prob, 
                                                   output_keep_prob=self.keep_prob)
             cell = rnn_cell.MultiRNNCell([single_cell] * self.num_layers, state_is_tuple=True)
@@ -95,9 +95,10 @@ class RNNLMModel(TFModel):
         for idx, gpu_id in enumerate(self.gpus):
             with tf.device('/gpu:%d' % gpu_id):
                 with tf.name_scope('Tower_%d' % (gpu_id)) as tower_scope:
-                    gpu_scope = tf.variable_scope('gpu', reuse=(idx!=0))
+                    reuse = (idx!=0)
+                    gpu_scope = tf.variable_scope('gpu', reuse=reuse)
                     with gpu_scope as gpu_scope:
-                        self.build_input_sequence(gpu_id=idx)
+                        self.build_input_sequence(gpu_id=idx, reuse=reuse)
                         self.build_sequence_prediction(type=type,gpu_id=idx,accK=accK,nb_class=nb_class)
         self.build_model_aggregation()
 
