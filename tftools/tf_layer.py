@@ -185,7 +185,7 @@ def my_flatten(input_tensor, layer_name='flatten'):
   z = t * g(Wy + b) + (1 - t) * y
   where g is nonlinearity, t is transform gate, and (1 - t) is carry gate.
  """
-def highway(input_, layer_size=1, bias=0, f=tf.nn.relu, layer_name='highway',scope=None, reuse=False):
+def highway(input_, layer_size=1, bias=0.0, f=tf.nn.relu, layer_name='highway',scope=None, reuse=False):
     output = input_
     size = input_.get_shape()[-1]
     vscope = get_new_variable_scope(layer_name, scope, reuse=reuse)
